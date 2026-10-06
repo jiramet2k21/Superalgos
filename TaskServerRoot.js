@@ -68,6 +68,16 @@ async function runRoot() {
     ethers: require('ethers'),
     vaderSentiment: require('vader-sentiment')
   }
+  /*
+  The sqlite3 driver is optional: dataset storage works with plain JSON files
+  when it is not installed. Registered defensively so that the sqlite storage
+  backend can pick it up when available.
+  */
+  try {
+    SA.nodeModules.sqlite3 = require('sqlite3')
+  } catch (err) {
+    SA.nodeModules.sqlite3 = undefined
+  }
   SA.version = require('./package.json').version
 
   /**

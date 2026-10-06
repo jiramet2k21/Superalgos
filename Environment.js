@@ -66,6 +66,15 @@ exports.newEnvironment = function () {
             TYPE: 'file',
             USERS_TABLE: path.join(basePath, './Platform/My-Data-Storage/Network/userProfileBalances.json')
         },
+        /*
+        Backend used to store mined datasets (Data.json files under
+        Project/Data-Mining/). 'json' is the historical behaviour,
+        'sqlite' stores the same datasets in per-market SQLite files,
+        which survive process crashes without corrupting the data.
+        Overridable with the DATA_STORAGE_BACKEND environment variable.
+        Only one backend is active at a time.
+        */
+        DATA_STORAGE_BACKEND: process.env.DATA_STORAGE_BACKEND || 'json',
     }
 
     setProfileOverrideValues()
@@ -108,6 +117,7 @@ exports.newEnvironment = function () {
         if(profile.storeData !== undefined) { thisObject.PATH_TO_DATA_STORAGE = profile.storeData }
         if(profile.storeLogs !== undefined) { thisObject.PATH_TO_LOG_FILES = profile.storeLogs }
         if(profile.storeWorkspaces !== undefined) { thisObject.PATH_TO_MY_WORKSPACES = profile.storeWorkspaces }
+        if(profile.dataStorageBackend !== undefined) { thisObject.DATA_STORAGE_BACKEND = profile.dataStorageBackend }
         if(profile.logLevel !== undefined) { thisObject.LOG_LEVEL = profile.logLevel }
         if(profile.p2pNetworkNodeSigningAccount !== undefined) { thisObject.P2P_NETWORK_NODE_SIGNING_ACCOUNT = profile.p2pNetworkNodeSigningAccount }
         if(profile.database !== undefined) {

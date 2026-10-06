@@ -26,6 +26,31 @@ exports.newFileStorage = function newFileStorage(processIndex, host, port) {
     } else {
         logger = TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT
     }
+    /*
+    SQLite dataset storage backend. When global.env.DATA_STORAGE_BACKEND is
+    'sqlite' and the sqlite3 driver is available, mined dataset files
+    (Project/Data-Mining/.../Data.json) are read from and written to
+    per-market SQLite files instead of plain JSON files. A SQLite transaction
+    either commits fully or not at all, so a Node.js crash or a closed
+    terminal can no longer leave a half-written Data.json behind.
+    Everything else keeps using the historical JSON file flow below.
+    */
+    const datasetMap = require('./SqliteDatasetMap.js')
+    let sqliteBackend
+    try {
+        const SQLITE_BACKEND_MODULE = require('./SqliteBackend.js')
+        sqliteBackend = SQLITE_BACKEND_MODULE.newSqliteBackend(processIndex)
+    } catch (err) {
+        sqliteBackend = undefined
+    }
+
+    function useSqliteBackend(filePath) {
+        if (sqliteBackend === undefined) { return false }
+        if (sqliteBackend.isAvailable() === false) { return false }
+        if (global.env.DATA_STORAGE_BACKEND !== 'sqlite') { return false }
+        if (host !== undefined && host !== 'localhost' && host !== ip.address() && host !== '127.0.0.1') { return false }
+        return datasetMap.isSqlitePath(filePath)
+    }
     return thisObject
 
     async function asyncGetTextFile(filePath, noRetry, canUsePrevious) {
@@ -66,6 +91,19 @@ exports.newFileStorage = function newFileStorage(processIndex, host, port) {
     }
 
     function getTextFile(filePath, callBackFunction, noRetry, canUsePrevious) {
+
+        /* Mined datasets are served from SQLite when that backend is enabled. */
+        if (useSqliteBackend(filePath)) {
+            sqliteBackend.getTextFile(filePath, callBackFunction, noRetry)
+            return
+        }
+        /*
+        Harden the JSON path: Data.json reads fall back to the Previous copy
+        when the current file is empty or fails to parse (crash leftovers).
+        */
+        if (canUsePrevious === undefined && typeof filePath === 'string' && filePath.endsWith('/Data.json')) {
+            canUsePrevious = true
+        }
 
         let currentRetryGetTextFile = 0
 
@@ -235,6 +273,19 @@ exports.newFileStorage = function newFileStorage(processIndex, host, port) {
 
     function createTextFile(filePath, fileContent, callBackFunction, keepPrevious, noTemp) {
 
+        /* Mined datasets are stored in SQLite when that backend is enabled. */
+        if (useSqliteBackend(filePath)) {
+            sqliteBackend.createTextFile(filePath, fileContent, callBackFunction)
+            return
+        }
+        /*
+        Harden the JSON path: every Data.json write keeps a Previous copy so
+        that a crash during the delete + rename window stays recoverable.
+        */
+        if (keepPrevious === undefined && typeof filePath === 'string' && filePath.endsWith('/Data.json')) {
+            keepPrevious = true
+        }
+
         let currentRetryWriteTextFile = 0
 
         recursiveCreateTextFile(filePath, fileContent, callBackFunction, keepPrevious, noTemp)
@@ -388,6 +439,12 @@ exports.newFileStorage = function newFileStorage(processIndex, host, port) {
     }
 
     function deleteTextFile(filePath, callBackFunction) {
+
+        /* Mined datasets are dropped from SQLite when that backend is enabled. */
+        if (useSqliteBackend(filePath)) {
+            sqliteBackend.deleteDatasetFile(filePath, callBackFunction)
+            return
+        }
 
         let currentRetryDeleteTextFile = 0
 

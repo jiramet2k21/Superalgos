@@ -66,6 +66,16 @@ async function runRoot() {
     ndjson: require('ndjson'),
     pako: require('pako')
   }
+  /*
+  The sqlite3 driver is optional: dataset storage works with plain JSON files
+  when it is not installed. Registered defensively so that the sqlite storage
+  backend (used by the /Storage/ http route) can pick it up when available.
+  */
+  try {
+    SA.nodeModules.sqlite3 = require('sqlite3')
+  } catch (err) {
+    SA.nodeModules.sqlite3 = undefined
+  }
 
   const saLogsPath = SA.nodeModules.path.join(global.env.PATH_TO_LOG_FILES, 'Platform')
   SA.logger = require('./loggerFactory').loggerFactory(saLogsPath, 'SA')
