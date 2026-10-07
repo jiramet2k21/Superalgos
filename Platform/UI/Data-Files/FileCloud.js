@@ -1,3 +1,33 @@
+/*
+Concurrency cap for the chart-load fan-out. Each chart pane fires one
+request per timeframe plus meta files, all at once, while the browser
+caps connections per host and the server threadpool saturates. Requests
+beyond the cap wait in a FIFO queue instead of piling up. Declared at
+file top-level so that ALL FileCloud instances created by every chart
+loader share ONE global queue (one fileCloud is created per loader, so
+per-instance state would multiply the burst by the loader count).
+*/
+const FILE_CLOUD_MAX_CONCURRENT_FETCHES = 8
+let fileCloudActiveFetches = 0
+let fileCloudFetchQueue = []
+
+function fileCloudEnqueueFetch(fetchTask) {
+  fileCloudFetchQueue.push(fetchTask)
+  fileCloudPumpFetchQueue()
+}
+
+function fileCloudPumpFetchQueue() {
+  while (fileCloudActiveFetches < FILE_CLOUD_MAX_CONCURRENT_FETCHES && fileCloudFetchQueue.length > 0) {
+    fileCloudActiveFetches++
+    let fetchTask = fileCloudFetchQueue.shift()
+    fetchTask(fileCloudReleaseFetchSlot)
+  }
+}
+
+function fileCloudReleaseFetchSlot() {
+  if (fileCloudActiveFetches > 0) { fileCloudActiveFetches-- }
+  fileCloudPumpFetchQueue()
+}
 
 function newFileCloud () {
   const MODULE_NAME = 'File Cloud'
@@ -16,36 +46,7 @@ function newFileCloud () {
 
   let fileStorage
 
-  /*
-  Concurrency cap for the chart-load fan-out. Each chart pane fires one
-  request per timeframe plus meta files, all at once, while the browser
-  caps connections per host and the server threadpool saturates. Requests
-  beyond the cap wait in a FIFO queue instead of piling up. Declared here,
-  before the return, so the state is initialized during construction.
-  */
-  const MAX_CONCURRENT_FETCHES = 8
-  let activeFetches = 0
-  let fetchQueue = []
-
   return thisObject
-
-  function enqueueFetch(fetchTask) {
-    fetchQueue.push(fetchTask)
-    pumpFetchQueue()
-  }
-
-  function pumpFetchQueue() {
-    while (activeFetches < MAX_CONCURRENT_FETCHES && fetchQueue.length > 0) {
-      activeFetches++
-      let fetchTask = fetchQueue.shift()
-      fetchTask(releaseFetchSlot)
-    }
-  }
-
-  function releaseFetchSlot() {
-    if (activeFetches > 0) { activeFetches-- }
-    pumpFetchQueue()
-  }
 
   function initialize (pBot, pHost, pPort, scheme='http') {
     fileStorage = newFileStorage(pHost, pPort, scheme)
@@ -54,7 +55,7 @@ function newFileCloud () {
   function getFile (pMine, pBot, pSession, pProduct, pDataset, pExchange, pMarket, ptimeFrameLabel, pDatetime, pSequence, pDataRange, pTimeFrames, callBackFunction) {
     try {
       const MAX_RETRIES = 3
-      enqueueFetch(runFetch)
+      fileCloudEnqueueFetch(runFetch)
 
       function runFetch(release) {
         getFileRecursively(0, pMine, pBot, pSession, pProduct, pDataset, pExchange, pMarket, ptimeFrameLabel, pDatetime, pSequence, pDataRange, pTimeFrames, onFetchSettled)
