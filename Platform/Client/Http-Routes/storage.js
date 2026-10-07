@@ -56,7 +56,7 @@ exports.newStorageRoute = function newStorageRoute() {
                 httpResponses.respondWithContent(undefined, httpResponse)
                 return
             }
-            db.all('SELECT * FROM "' + parsed.tableName + '" ORDER BY begin ASC', onRows)
+            db.all('SELECT * FROM "' + parsed.tableName + '" ORDER BY seq ASC', onRows)
         }
 
         function onRows(err, records) {
@@ -68,7 +68,8 @@ exports.newStorageRoute = function newStorageRoute() {
             let width = 0
             for (let i = 0; i < records.length; i++) {
                 let keys = Object.keys(records[i])
-                if (keys.length - 2 > width) { width = keys.length - 2 }
+                /* Keys are seq, begin, end, c0..cn. */
+                if (keys.length - 3 > width) { width = keys.length - 3 }
             }
             let rows = []
             for (let i = 0; i < records.length; i++) {

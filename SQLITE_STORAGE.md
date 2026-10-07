@@ -23,7 +23,19 @@ per-market SQLite files instead of JSON files:
 
     Project/Data-Mining/Data-Mine/<mine>/<bot>/<exchange>/<market>.sqlite
 
-with one table per dataset. Every write runs inside a single SQLite
+with one table per dataset. Table layout (v2):
+
+    seq INTEGER PRIMARY KEY, begin INTEGER, end INTEGER, c0 TEXT, c1 TEXT, ...
+
+`seq` is the 0-based row number in the original file, so reads ordered by
+`seq` reproduce the file byte-identically. `begin` / `end` are indexed
+copies of the dataset timestamps, auto-detected per file (market files
+`[begin, end, ...]`, daily candles `[open, high, low, close, begin, end]`,
+daily volumes `[buy, sell, begin, end]`, ...); they are NULL when a file
+carries no recognizable timestamps, in which case file order still holds.
+Every original cell is stored positionally in `c0..cn` as its JSON
+encoding, so all Javascript types (numbers, strings, booleans, nulls)
+survive the round trip exactly. Every write runs inside a single SQLite
 transaction (`BEGIN IMMEDIATE ... COMMIT`) in WAL mode: a crash either
 commits everything or nothing, so **a dataset can never be half-written**.
 A torn write simply leaves the previous committed version in place and
@@ -71,9 +83,10 @@ unless you deleted them.
   code is unchanged. In `json` mode nothing changes at all; in `sqlite`
   mode only local `Project/Data-Mining/.../Data.json` paths are rerouted
   (remote hosts over HTTP keep working as before).
-* Values keep their exact Javascript types (SQLite BLOB affinity), so
-  `JSON.stringify` of a sqlite-backed read is byte-identical to the
-  original file content: column order, numbers, strings and nulls.
+* Values keep their exact Javascript types: every cell is stored as its
+  JSON encoding and decoded on read, so `JSON.stringify` of a
+  sqlite-backed read is byte-identical to the original file content:
+  row order (`seq`), column order, numbers, strings, booleans and nulls.
 * Charting (`/Storage/` route) serves sqlite-backed datasets transparently;
   a missing dataset still answers `404 / The specified key does not exist.`
   exactly like a missing file.
@@ -99,5 +112,6 @@ two options:
    pre-migration JSON files) for the terminal to read.
 2. Add a small reader shim in the terminal that opens
    `<market>.sqlite` and returns `JSON.stringify(rows)` — the table layout
-   is `begin INTEGER PRIMARY KEY, end INTEGER, c0, c1, ...` ordered by
-   `begin ASC`, table names derivable from `SqliteDatasetMap.js`.
+   is `seq INTEGER PRIMARY KEY, begin INTEGER, end INTEGER, c0..cn TEXT`
+   ordered by `seq ASC` (cells are per-value JSON encodings, `JSON.parse`
+   each one), table names derivable from `SqliteDatasetMap.js`.

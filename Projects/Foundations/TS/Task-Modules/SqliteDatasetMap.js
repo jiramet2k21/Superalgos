@@ -16,14 +16,15 @@ They are stored in one SQLite file per mine + bot + exchange + market:
 
 with one table per dataset (bot + output path), holding rows shaped as:
 
-    begin INTEGER PRIMARY KEY, end INTEGER, c0 TEXT, c1 TEXT, c2 TEXT, ...
+    seq INTEGER PRIMARY KEY, begin INTEGER, end INTEGER, c0 TEXT, c1 TEXT, ...
 
-Data columns are stored as the JSON encoding of each cell. SQLite has no
-boolean type and normalizes some Javascript values, so encoding every cell
-with JSON.stringify on write and JSON.parse on read is what guarantees that
-JSON.stringify(rows) after a round trip is byte-identical to the original
-file content, which is what every consumer expects. begin / end stay raw
-numbers so ORDER BY begin keeps working.
+Row layouts differ per dataset: market files look like [begin, end, ...],
+daily candle files like [open, high, low, close, begin, end] and daily
+volume files like [buy, sell, begin, end]. detectBeginEnd() locates the
+timestamp pair per file; ALL original cells are then stored positionally in
+c0..cn so the round trip is exact regardless of layout. begin / end are
+indexed copies used for ordering; seq preserves file order (and keeps rows
+with duplicate timestamps, which do occur in mined data).
 */
 function isSqlitePath(filePath) {
     if (typeof filePath !== 'string') { return false }
@@ -73,12 +74,62 @@ function tableWidth(rows) {
             width = rows[i].length
         }
     }
-    /* First two positions are always begin / end. */
-    return Math.max(width - 2, 0)
+    return width
+}
+
+/*
+Datasets do not share one row layout: market files are [begin, end, ...],
+daily candle files are [open, high, low, close, begin, end], daily volume
+files are [buy, sell, begin, end]. This scans the first rows for an
+adjacent integer pair in epoch-millisecond range with end > begin and a
+plausible duration, and returns its position. Returns { beginIndex: -1 }
+when no timestamp pair is detectable (ordering then falls back to seq,
+which always matches file order).
+*/
+function detectBeginEnd(rows) {
+    const EPOCH_MS_MIN = 1000000000000
+    const EPOCH_MS_MAX = 10000000000000
+    const MAX_DURATION_MS = 366 * 86400 * 1000
+    const SCAN_ROWS = 20
+    let votes = {}
+    let checked = 0
+    for (let r = 0; r < rows.length && checked < SCAN_ROWS; r++) {
+        let row = rows[r]
+        if (Array.isArray(row) === false) { continue }
+        checked++
+        for (let i = 0; i + 1 < row.length; i++) {
+            let begin = row[i]
+            let end = row[i + 1]
+            if (typeof begin !== 'number' || typeof end !== 'number') { continue }
+            if (Number.isInteger(begin) === false || Number.isInteger(end) === false) { continue }
+            if (begin < EPOCH_MS_MIN || begin > EPOCH_MS_MAX) { continue }
+            if (end <= begin || end - begin > MAX_DURATION_MS) { continue }
+            votes[i] = (votes[i] || 0) + 1
+        }
+    }
+    let bestIndex = -1
+    let bestVotes = 0
+    for (let key of Object.keys(votes)) {
+        if (votes[key] > bestVotes) {
+            bestVotes = votes[key]
+            bestIndex = parseInt(key, 10)
+        }
+    }
+    if (bestIndex >= 0 && bestVotes >= Math.min(3, checked)) {
+        return { beginIndex: bestIndex }
+    }
+    return { beginIndex: -1 }
+}
+
+function isLegacyTable(columns) {
+    /* v1 tables were (begin INTEGER PRIMARY KEY, end INTEGER, cN...);
+    v2 tables start with a seq column. */
+    if (Array.isArray(columns) === false || columns.length === 0) { return false }
+    return columns[0].name !== 'seq'
 }
 
 function createTableStatement(tableName, dataWidth) {
-    let columns = ['begin INTEGER PRIMARY KEY', 'end INTEGER']
+    let columns = ['seq INTEGER PRIMARY KEY', 'begin INTEGER', 'end INTEGER']
     for (let i = 0; i < dataWidth; i++) {
         columns.push('c' + i + ' TEXT')
     }
@@ -100,22 +151,26 @@ function normalizeValue(value) {
     return value
 }
 
-function rowToRecord(row, dataWidth) {
-    let record = [normalizeValue(row[0]), normalizeValue(row[1])]
-    for (let i = 0; i < dataWidth; i++) {
-        record.push(encodeCell(row[i + 2]))
+function rowToRecord(row, layout, seq) {
+    /* layout = { beginIndex, width }. All original cells are stored
+    positionally in c0..cn; begin / end are indexed copies (or null when
+    the file layout carries no detectable timestamps). */
+    let record = [seq, null, null]
+    if (layout.beginIndex >= 0) {
+        record[1] = normalizeValue(row[layout.beginIndex])
+        record[2] = normalizeValue(row[layout.beginIndex + 1])
+    }
+    for (let i = 0; i < layout.width; i++) {
+        record.push(encodeCell(row[i]))
     }
     return record
 }
 
 function recordToRow(record, dataWidth) {
     /* record is a node-sqlite3 row object keyed by column name
-    ({ begin, end, c0, c1, ... }); the returned array is positional to
-    match the historical Data.json layout. */
-    let row = [
-        record.begin === undefined ? null : record.begin,
-        record.end === undefined ? null : record.end
-    ]
+    ({ seq, begin, end, c0, c1, ... }); the returned array is positional
+    to match the historical Data.json layout. */
+    let row = []
     for (let i = 0; i < dataWidth; i++) {
         let value = record['c' + i]
         row.push(value === undefined ? null : decodeCell(value))
@@ -128,6 +183,8 @@ module.exports = {
     parseDatasetPath: parseDatasetPath,
     sanitizeTableName: sanitizeTableName,
     tableWidth: tableWidth,
+    detectBeginEnd: detectBeginEnd,
+    isLegacyTable: isLegacyTable,
     createTableStatement: createTableStatement,
     rowToRecord: rowToRecord,
     recordToRow: recordToRow

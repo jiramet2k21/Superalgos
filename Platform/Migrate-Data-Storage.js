@@ -103,6 +103,7 @@ async function main() {
                 continue
             }
             entry.rows = rows.length
+            entry.layout = 'v2 beginIndex=' + datasetMap.detectBeginEnd(rows).beginIndex
             if (options.dryRun === true) {
                 entry.ok = true
                 counters.ok++
@@ -180,22 +181,25 @@ async function importRows(storageRootPath, parsed, rows) {
     try {
         await execAsync(db, 'PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000; PRAGMA synchronous=NORMAL;')
         await execAsync(db, 'BEGIN IMMEDIATE')
+        /*
+        v2 layout: every import starts from an empty table, so neither v1
+        leftovers from the first migration attempt nor partial rows from an
+        interrupted run can survive. Table shape:
+        seq INTEGER PRIMARY KEY, begin INTEGER, end INTEGER, c0..cn TEXT
+        holding ALL original cells positionally in file order.
+        */
+        await execAsync(db, 'DROP TABLE IF EXISTS "' + parsed.tableName + '"')
+        let layout = datasetMap.detectBeginEnd(rows)
         let dataWidth = datasetMap.tableWidth(rows)
+        layout.width = dataWidth
         await execAsync(db, datasetMap.createTableStatement(parsed.tableName, dataWidth))
-        let columns = await allAsync(db, 'PRAGMA table_info("' + parsed.tableName + '")')
-        let existingWidth = columns.length - 2
-        for (let next = existingWidth; next < dataWidth; next++) {
-            await execAsync(db, 'ALTER TABLE "' + parsed.tableName + '" ADD COLUMN c' + next)
-        }
-        let finalWidth = existingWidth > dataWidth ? existingWidth : dataWidth
-        await execAsync(db, 'DELETE FROM "' + parsed.tableName + '"')
         if (rows.length > 0) {
-            let placeholders = ['?', '?']
-            for (let i = 0; i < finalWidth; i++) { placeholders.push('?') }
+            let placeholders = ['?', '?', '?']
+            for (let i = 0; i < dataWidth; i++) { placeholders.push('?') }
             let statement = await prepareAsync(db, 'INSERT INTO "' + parsed.tableName + '" VALUES (' + placeholders.join(', ') + ')')
             try {
                 for (let i = 0; i < rows.length; i++) {
-                    await runAsync(statement, datasetMap.rowToRecord(rows[i], finalWidth))
+                    await runAsync(statement, datasetMap.rowToRecord(rows[i], layout, i))
                 }
             } finally {
                 await finalizeAsync(statement)
@@ -204,7 +208,7 @@ async function importRows(storageRootPath, parsed, rows) {
         await execAsync(db, 'CREATE TABLE IF NOT EXISTS "_meta" (table_name TEXT PRIMARY KEY, source_path TEXT, width INTEGER, rows INTEGER, updated_at INTEGER)')
         let meta = await prepareAsync(db, 'INSERT INTO "_meta" (table_name, source_path, width, rows, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(table_name) DO UPDATE SET source_path=excluded.source_path, width=excluded.width, rows=excluded.rows, updated_at=excluded.updated_at')
         try {
-            await runAsync(meta, [parsed.tableName, parsed.sourcePath, finalWidth, rows.length, Date.now()])
+            await runAsync(meta, [parsed.tableName, parsed.sourcePath, dataWidth, rows.length, Date.now()])
         } finally {
             await finalizeAsync(meta)
         }

@@ -117,7 +117,13 @@ exports.newSqliteBackend = function newSqliteBackend(processIndex) {
                         retryOrFail(err)
                         return
                     }
-                    db.all('SELECT * FROM "' + parsed.tableName + '" ORDER BY begin ASC', onRows)
+                    /*
+                    Rows are returned in seq order, which is the order the rows
+                    had in the original Data.json file. That order is the
+                    contract every consumer was built against, so the read is
+                    byte-identical to the file it replaces.
+                    */
+                    db.all('SELECT * FROM "' + parsed.tableName + '" ORDER BY seq ASC', onRows)
                 }
 
                 function onRows(err, records) {
@@ -138,8 +144,8 @@ exports.newSqliteBackend = function newSqliteBackend(processIndex) {
                     let width = 0
                     for (let i = 0; i < records.length; i++) {
                         let keys = Object.keys(records[i])
-                        /* Keys are begin, end, c0..cn. */
-                        if (keys.length - 2 > width) { width = keys.length - 2 }
+                        /* Keys are seq, begin, end, c0..cn. */
+                        if (keys.length - 3 > width) { width = keys.length - 3 }
                     }
                     let rows = []
                     for (let i = 0; i < records.length; i++) {
@@ -243,22 +249,24 @@ exports.newSqliteBackend = function newSqliteBackend(processIndex) {
 
                     function writeTransaction() {
                         try {
+                            let layout = datasetMap.detectBeginEnd(rows)
                             let dataWidth = datasetMap.tableWidth(rows)
-                            db.exec(datasetMap.createTableStatement(parsed.tableName, dataWidth), onTableReady.bind(null, dataWidth))
+                            layout.width = dataWidth
+                            db.exec(datasetMap.createTableStatement(parsed.tableName, dataWidth), function (err) { onTableReady(layout, dataWidth, err) })
                         } catch (err) {
                             rollbackAndRetry(err)
                         }
                     }
 
-                    function onTableReady(dataWidth, err) {
+                    function onTableReady(layout, dataWidth, err) {
                         if (err) {
                             rollbackAndRetry(err)
                             return
                         }
-                        growColumnsIfNeeded(dataWidth)
+                        dropLegacyTableIfNeeded(layout, dataWidth)
                     }
 
-                    function growColumnsIfNeeded(dataWidth) {
+                    function dropLegacyTableIfNeeded(layout, dataWidth) {
                         db.all('PRAGMA table_info("' + parsed.tableName + '")', onColumns)
 
                         function onColumns(err, columns) {
@@ -266,17 +274,47 @@ exports.newSqliteBackend = function newSqliteBackend(processIndex) {
                                 rollbackAndRetry(err)
                                 return
                             }
-                            /* columns: begin, end, c0..cn -> existing width is length - 2 */
-                            let existingWidth = columns.length - 2
+                            if (datasetMap.isLegacyTable(columns) === true) {
+                                /*
+                                v1 layout (begin as PRIMARY KEY, no seq column):
+                                it cannot hold every dataset shape, so it is
+                                dropped and recreated in the v2 layout. The
+                                source Data.json files are untouched, so
+                                nothing is lost.
+                                */
+                                db.exec('DROP TABLE "' + parsed.tableName + '"', onDropped)
+                                return
+                            }
+                            growColumnsIfNeeded(layout, dataWidth, columns)
+                        }
+
+                        function onDropped(err) {
+                            if (err) {
+                                rollbackAndRetry(err)
+                                return
+                            }
+                            db.exec(datasetMap.createTableStatement(parsed.tableName, dataWidth), function (createErr) {
+                                if (createErr) {
+                                    rollbackAndRetry(createErr)
+                                    return
+                                }
+                                replaceRows(layout, dataWidth)
+                            })
+                        }
+                    }
+
+                    function growColumnsIfNeeded(layout, dataWidth, columns) {
+                        /* columns: seq, begin, end, c0..cn -> existing width is length - 3 */
+                        let existingWidth = columns.length - 3
                             if (existingWidth < dataWidth) {
                                 let next = existingWidth
                                 addNextColumn()
                                 function addNextColumn() {
                                     if (next >= dataWidth) {
-                                        replaceRows(dataWidth)
+                                        replaceRows(layout, dataWidth)
                                         return
                                     }
-                                    db.exec('ALTER TABLE "' + parsed.tableName + '" ADD COLUMN c' + next, onAdded)
+                                    db.exec('ALTER TABLE "' + parsed.tableName + '" ADD COLUMN c' + next + ' TEXT', onAdded)
                                     function onAdded(err) {
                                         if (err) {
                                             rollbackAndRetry(err)
@@ -287,16 +325,15 @@ exports.newSqliteBackend = function newSqliteBackend(processIndex) {
                                     }
                                 }
                             } else {
-                                replaceRows(existingWidth > dataWidth ? existingWidth : dataWidth)
+                                replaceRows(layout, existingWidth > dataWidth ? existingWidth : dataWidth)
                             }
                         }
+
+                    function replaceRows(layout, dataWidth) {
+                        db.exec('DELETE FROM "' + parsed.tableName + '"', function (err) { onDeleted(layout, dataWidth, err) })
                     }
 
-                    function replaceRows(dataWidth) {
-                        db.exec('DELETE FROM "' + parsed.tableName + '"', onDeleted.bind(null, dataWidth))
-                    }
-
-                    function onDeleted(dataWidth, err) {
+                    function onDeleted(layout, dataWidth, err) {
                         if (err) {
                             rollbackAndRetry(err)
                             return
@@ -305,17 +342,18 @@ exports.newSqliteBackend = function newSqliteBackend(processIndex) {
                             updateMetaAndCommit(dataWidth)
                             return
                         }
-                        let placeholders = ['?', '?']
+                        let placeholders = ['?', '?', '?']
                         for (let i = 0; i < dataWidth; i++) { placeholders.push('?') }
-                        let statement = db.prepare('INSERT INTO "' + parsed.tableName + '" VALUES (' + placeholders.join(', ') + ')', function (err) { onPrepared(dataWidth, err, this) })
+                        let statement = db.prepare('INSERT INTO "' + parsed.tableName + '" VALUES (' + placeholders.join(', ') + ')', function (err) { onPrepared(layout, dataWidth, err, this) })
                     }
 
-                    function onPrepared(dataWidth, err, statement) {
+                    function onPrepared(layout, dataWidth, err, statement) {
                         if (err) {
                             rollbackAndRetry(err)
                             return
                         }
                         let index = 0
+                        let sequence = 0
                         insertNext()
 
                         function insertNext() {
@@ -323,7 +361,7 @@ exports.newSqliteBackend = function newSqliteBackend(processIndex) {
                                 statement.finalize(onFinalized)
                                 return
                             }
-                            let record = datasetMap.rowToRecord(rows[index], dataWidth)
+                            let record = datasetMap.rowToRecord(rows[index], layout, sequence)
                             statement.run(record, onRun)
                         }
 
@@ -335,6 +373,7 @@ exports.newSqliteBackend = function newSqliteBackend(processIndex) {
                                 return
                             }
                             index++
+                            sequence++
                             insertNext()
                         }
 
