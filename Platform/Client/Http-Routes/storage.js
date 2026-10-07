@@ -171,17 +171,28 @@ exports.newStorageRoute = function newStorageRoute() {
                 httpResponses.respondWithContent(undefined, httpResponse)
                 return
             }
+            /* Brief waits instead of instant SQLITE_BUSY when a mining
+            writer holds the database: reads slow down slightly instead of
+            failing into client retry storms. */
+            db.exec('PRAGMA busy_timeout=30000', onPragmas)
+        }
+
+        function onPragmas(err) {
+            if (err) {
+                db.close()
+                httpResponses.respondWithContent(undefined, httpResponse)
+                return
+            }
             /*
             Fingerprint without reading the dataset: PRAGMA data_version
             increments on every committed write transaction (even into the
-            WAL, even from another process), and MAX(seq) rides the INTEGER
-            PRIMARY KEY index. File mtimes are deliberately NOT used: WAL
-            commits may leave the main db file untouched until checkpoint,
-            while the -wal/-shm sidecars appear and vanish with connection
-            lifecycles, so stat-based fingerprints jitter with zero data
-            change. A data_version is per database file, so a write to a
-            sibling table only costs one extra cache rebuild, never a
-            wrong 304.
+            WAL, even from another process). File mtimes are deliberately
+            NOT used: WAL commits may leave the main db file untouched
+            until checkpoint, while the -wal/-shm sidecars appear and
+            vanish with connection lifecycles, so stat-based fingerprints
+            jitter with zero data change. A data_version is per database
+            file, so a write to a sibling table only costs one extra cache
+            rebuild, never a wrong 304.
             */
             db.get('PRAGMA data_version', onVersion)
         }
@@ -192,21 +203,7 @@ exports.newStorageRoute = function newStorageRoute() {
                 httpResponses.respondWithContent(undefined, httpResponse)
                 return
             }
-            db.get('SELECT MAX(seq) AS maxSeq FROM "' + parsed.tableName + '"', function (maxErr, maxRow) {
-                onMax(maxErr, maxRow, versionRow.data_version)
-            })
-        }
-
-        function onMax(err, maxRow, dataVersion) {
-            if (err) {
-                /* Missing table reads as a missing file, like JSON does. */
-                db.close()
-                httpResponses.respondWithContent(undefined, httpResponse)
-                return
-            }
-            let maxSeq = (maxRow && maxRow.maxSeq !== null && maxRow.maxSeq !== undefined) ? maxRow.maxSeq : -1
-            let fingerprint = dataVersion + '/' + maxSeq
-            let etag = etagFor('sqlite:' + fingerprint)
+            let etag = etagFor('sqlite:' + versionRow.data_version)
             if (clientEtag === etag) {
                 db.close()
                 serveNotModified(httpResponse, etag)
@@ -233,13 +230,33 @@ exports.newStorageRoute = function newStorageRoute() {
                 /* Keys are seq, begin, end, c0..cn. */
                 if (keys.length - 3 > width) { width = keys.length - 3 }
             }
-            let rows = []
+            /*
+            Cells are stored as pre-encoded JSON fragments (see
+            SqliteDatasetMap), so the body is built by concatenation
+            instead of per-cell JSON.parse + JSON.stringify: byte-identical
+            output at a fraction of the CPU cost.
+            */
+            let parts = ['[']
             for (let i = 0; i < records.length; i++) {
-                rows.push(datasetMap.recordToRow(records[i], width))
+                if (i > 0) { parts.push(',') }
+                let record = records[i]
+                parts.push('[')
+                for (let c = 0; c < width; c++) {
+                    if (c > 0) { parts.push(',') }
+                    parts.push(fragmentToJson(record['c' + c]))
+                }
+                parts.push(']')
             }
-            let body = JSON.stringify(rows)
+            parts.push(']')
+            let body = parts.join('')
             setCached(etag, body)
             serveBody(httpResponse, body, etag)
+        }
+
+        function fragmentToJson(fragment) {
+            if (fragment === undefined || fragment === null) { return 'null' }
+            if (typeof fragment === 'string') { return fragment }
+            return JSON.stringify(fragment)
         }
     }
 }
