@@ -13,6 +13,19 @@ const fatalErrorHelp = () => {
 }
 
 const runPlatform = () => {
+  /*
+  The Platform serves hundreds of small dataset files concurrently on chart
+  load (see /Storage/ route). Node's libuv threadpool defaults to 4 threads,
+  which serializes all filesystem reads and pins those 4 workers at ~100%
+  CPU for the whole burst while the main thread idles. Raise the default so
+  concurrent file and sqlite reads run in parallel. An explicitly exported
+  UV_THREADPOOL_SIZE always wins (libuv reads it once per process start and
+  caps it at 1024). The forked PlatformRoot process — and every Task Server
+  child it forks later — inherits this environment automatically.
+  */
+  if (process.env.UV_THREADPOOL_SIZE === undefined) {
+    process.env.UV_THREADPOOL_SIZE = '32'
+  }
   if (
     process.argv.includes("help") ||
     process.argv.includes("-help") ||
