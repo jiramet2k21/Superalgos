@@ -146,12 +146,41 @@ function loadSuperalgos() {
     }
 }
 
+const HTTP_REQUEST_TIMEOUT_MS = 90000
+
 function httpRequest(pContentToSend, pPath, callBackFunction) {
     let xmlHttpRequest = new XMLHttpRequest()
+    /*
+    Every terminal outcome below settles the callback exactly once. This
+    used to handle only HTTP 200 and 404: any other outcome (HTTP 500 from
+    an overloaded server, network errors, hung connections) never invoked
+    the callback, leaked the caller's slot and left chart loaders waiting
+    forever. Timeouts and network errors report 'XHR error' so upstream
+    retry logic applies; other HTTP statuses fail fast without retrying.
+    */
+    let settled = false
+    function settle(callBack) {
+        if (settled === true) { return }
+        settled = true
+        callBack()
+    }
+    function fail(message) {
+        settle(function () {
+            callBackFunction({ result: "Fail", message: message })
+        })
+    }
     xmlHttpRequest.onreadystatechange = function () {
         if (this.readyState === 4 && this.status === 200) {
             try {
-                callBackFunction(GLOBAL.DEFAULT_OK_RESPONSE, xmlHttpRequest.responseText)
+                let responseETag = null
+                try {
+                    responseETag = xmlHttpRequest.getResponseHeader('ETag')
+                } catch (err) {
+                    responseETag = null
+                }
+                settle(function () {
+                    callBackFunction(GLOBAL.DEFAULT_OK_RESPONSE, xmlHttpRequest.responseText, responseETag)
+                })
             } catch (err) {
                 console.log((new Date()).toISOString(), '[ERROR] httpRequest -> httpRequest -> err.stack = ' + err.stack)
                 console.log((new Date()).toISOString(), '[ERROR] httpRequest -> httpRequest -> pContentToSend = ' + pContentToSend)
@@ -161,23 +190,53 @@ function httpRequest(pContentToSend, pPath, callBackFunction) {
 
             }
             return
+        } else if (this.readyState === 4 && this.status === 304) {
+            /*
+            Conditional dataset read answered from the server cache
+            (?etag= revalidation). The body lives in the caller's cache;
+            surface the outcome distinctly so it can be served from there.
+            */
+            settle(function () {
+                callBackFunction({ result: "Not-Modified", message: "Not Modified" })
+            })
+            return
         } else if (this.readyState === 4 && this.status === 404) {
-            callBackFunction({ result: "Fail", message: xmlHttpRequest.responseText.trim(), code: xmlHttpRequest.responseText.trim() })
+            settle(function () {
+                callBackFunction({ result: "Fail", message: xmlHttpRequest.responseText.trim(), code: xmlHttpRequest.responseText.trim() })
+            })
+            return
+        } else if (this.readyState === 4) {
+            fail('HTTP ' + this.status)
             return
         }
     }
+    xmlHttpRequest.onerror = function () {
+        fail('XHR error')
+    }
+    xmlHttpRequest.ontimeout = function () {
+        fail('XHR error')
+    }
+    xmlHttpRequest.onabort = function () {
+        fail('XHR error')
+    }
 
     if (pContentToSend === undefined) {
-        xmlHttpRequest.open("GET", pPath, true)
-        xmlHttpRequest.send()
+        try {
+            xmlHttpRequest.open("GET", pPath, true)
+            xmlHttpRequest.timeout = HTTP_REQUEST_TIMEOUT_MS
+            xmlHttpRequest.send()
+        } catch (err) {
+            fail(err.message)
+        }
     } else {
         try {
             let blob = new Blob([pContentToSend], { type: 'text/plain' })
             xmlHttpRequest.open("POST", pPath, true)
+            xmlHttpRequest.timeout = HTTP_REQUEST_TIMEOUT_MS
             xmlHttpRequest.send(blob)
         } catch (err) {
             if (ERROR_LOG === true) { console.log(spacePad(MODULE_NAME, 50) + " : " + "[ERROR] callServer -> err.message = " & err.message) }
-            callBackFunction({ result: "Fail", message: err.message })
+            fail(err.message)
         }
     }
 }
@@ -202,15 +261,23 @@ function httpRequestAsync(pContentToSend, pPath) {
 
         if (pContentToSend === undefined) {
             xmlHttpRequest.open("GET", pPath, true)
+            xmlHttpRequest.timeout = HTTP_REQUEST_TIMEOUT_MS
             xmlHttpRequest.send()
             xmlHttpRequest.onload = xhrSuccess
             xmlHttpRequest.onerror = xhrError
+            xmlHttpRequest.ontimeout = function () {
+                reject({ result: 'Fail', message: 'XHR error' })
+            }
         } else {
             let blob = new Blob([pContentToSend], { type: 'text/plain' })
             xmlHttpRequest.open("POST", pPath, true)
+            xmlHttpRequest.timeout = HTTP_REQUEST_TIMEOUT_MS
             xmlHttpRequest.send(blob)
             xmlHttpRequest.onload = xhrSuccess
             xmlHttpRequest.onerror = xhrError
+            xmlHttpRequest.ontimeout = function () {
+                reject({ result: 'Fail', message: 'XHR error' })
+            }
         }
     })
 }
