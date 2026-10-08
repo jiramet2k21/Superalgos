@@ -195,7 +195,16 @@ function newMarketFiles() {
           }
         }
 
-        callBackFunction(GLOBAL.DEFAULT_OK_RESPONSE, thisObject)
+        /*
+        The completion callback inside onFileReceived fires once all
+        requested files settle. Calling back here as well used to report OK
+        a second time before any file arrived, which made parents initialize
+        twice and doubled the request fan-out. Only keep this call for the
+        empty case, where the loop above issues no request at all.
+        */
+        if (filesExpected === 0) {
+          callBackFunction(GLOBAL.DEFAULT_OK_RESPONSE, thisObject)
+        }
       }
     } catch (err) {
       if (ERROR_LOG === true) { logger.write('[ERROR] initialize -> err = ' + err.stack) }
