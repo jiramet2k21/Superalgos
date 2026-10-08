@@ -1,3 +1,33 @@
+/*
+Concurrency cap for the chart-load fan-out. Each chart pane fires one
+request per timeframe plus meta files, all at once, while the browser
+caps connections per host and the server threadpool saturates. Requests
+beyond the cap wait in a FIFO queue instead of piling up. Declared at
+file top-level so that ALL FileCloud instances created by every chart
+loader share ONE global queue (one fileCloud is created per loader, so
+per-instance state would multiply the burst by the loader count).
+*/
+const FILE_CLOUD_MAX_CONCURRENT_FETCHES = 8
+let fileCloudActiveFetches = 0
+let fileCloudFetchQueue = []
+
+function fileCloudEnqueueFetch(fetchTask) {
+  fileCloudFetchQueue.push(fetchTask)
+  fileCloudPumpFetchQueue()
+}
+
+function fileCloudPumpFetchQueue() {
+  while (fileCloudActiveFetches < FILE_CLOUD_MAX_CONCURRENT_FETCHES && fileCloudFetchQueue.length > 0) {
+    fileCloudActiveFetches++
+    let fetchTask = fileCloudFetchQueue.shift()
+    fetchTask(fileCloudReleaseFetchSlot)
+  }
+}
+
+function fileCloudReleaseFetchSlot() {
+  if (fileCloudActiveFetches > 0) { fileCloudActiveFetches-- }
+  fileCloudPumpFetchQueue()
+}
 
 function newFileCloud () {
   const MODULE_NAME = 'File Cloud'
@@ -15,6 +45,7 @@ function newFileCloud () {
   }
 
   let fileStorage
+
   return thisObject
 
   function initialize (pBot, pHost, pPort, scheme='http') {
@@ -24,7 +55,17 @@ function newFileCloud () {
   function getFile (pMine, pBot, pSession, pProduct, pDataset, pExchange, pMarket, ptimeFrameLabel, pDatetime, pSequence, pDataRange, pTimeFrames, callBackFunction) {
     try {
       const MAX_RETRIES = 3
-      getFileRecursively(0, pMine, pBot, pSession, pProduct, pDataset, pExchange, pMarket, ptimeFrameLabel, pDatetime, pSequence, pDataRange, pTimeFrames, callBackFunction)
+      fileCloudEnqueueFetch(runFetch)
+
+      function runFetch(release) {
+        getFileRecursively(0, pMine, pBot, pSession, pProduct, pDataset, pExchange, pMarket, ptimeFrameLabel, pDatetime, pSequence, pDataRange, pTimeFrames, onFetchSettled)
+
+        function onFetchSettled(err, data) {
+          /* Every terminal path below calls back exactly once, so the slot is always released. */
+          release()
+          callBackFunction(err, data)
+        }
+      }
 
       function getFileRecursively (pRetryCounter, pMine, pBot, pSession, pProduct, pDataset, pExchange, pMarket, ptimeFrameLabel, pDatetime, pSequence, pDataRange, pTimeFrames, callBackFunction) {
         try {
@@ -163,7 +204,7 @@ function newFileCloud () {
                     if (ERROR_LOG === true) { logger.write('[ERROR] getFile -> getFileRecursively -> onFileReceived -> MAX_RETRIES = ' + MAX_RETRIES) }
                     if (ERROR_LOG === true) { logger.write('[ERROR] getFile -> getFileRecursively -> onFileReceived -> pRetryCounter = ' + pRetryCounter) }
 
-                    getFileRecursively(pRetryCounter + 1, pMine, pBot, pDataset, pExchange, pMarket, ptimeFrameLabel, pDatetime, pSequence, pDataRange, callBackFunction)
+                    getFileRecursively(pRetryCounter + 1, pMine, pBot, pSession, pProduct, pDataset, pExchange, pMarket, ptimeFrameLabel, pDatetime, pSequence, pDataRange, pTimeFrames, callBackFunction)
                     return
                   } else {
                     if (ERROR_LOG === true) { logger.write('[ERROR] getFile -> getFileRecursively -> onFileReceived -> Could not get this file from storage. ') }
