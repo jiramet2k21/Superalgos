@@ -44,6 +44,23 @@
 
     function setuptWebSockets(callBackFunction) {
         try {
+            /*
+            Never allow more than one connection attempt or ping timer at a
+            time. Re-initializations used to pile up ping timers (the old
+            interval was never cleared), and the timers would then take turns
+            terminating healthy sockets: a self-sustaining reconnect storm
+            after a single delayed pong. Tear everything down first.
+            */
+            clearInterval(pingInterval)
+            pingInterval = undefined
+            if (WEB_SOCKETS_CLIENT !== undefined) {
+                try {
+                    WEB_SOCKETS_CLIENT.terminate()
+                } catch (err) {
+                    /* Socket already gone; nothing to tear down. */
+                }
+                WEB_SOCKETS_CLIENT = undefined
+            }
 
             if (INFO_LOG === true) {
                 SA.logger.info('setuptWebSockets at ' + host + ':' + port)
@@ -64,8 +81,9 @@
                         SA.logger.info('Websocket connection opened.')
                     }
                     
-                    /* Send keepalive message every 10 seconds */
+                    /* Send keepalive message every 10 seconds (exactly one timer; see setuptWebSockets). */
                     isAlive = true
+                    clearInterval(pingInterval)
                     pingInterval = setInterval(ping, 10000)
 
                     if (callBackFunction !== undefined) {
