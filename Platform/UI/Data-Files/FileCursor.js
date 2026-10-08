@@ -533,19 +533,12 @@ function newFileCursor() {
         try {
           if (INFO_LOG === true) { logger.write('[INFO] getFiles -> controlLoop -> Entering function.') }
 
+          callBackFunction(GLOBAL.DEFAULT_OK_RESPONSE)
+
           i++
 
           if (i < minCursorSize) {
             getNextFile()
-          } else {
-            /*
-            Report completion exactly once, when the cursor is full. Calling
-            back on every file made parents re-initialize per file and
-            multiplied the request fan-out.
-            */
-            if (callBackFunction !== undefined) {
-              callBackFunction(GLOBAL.DEFAULT_OK_RESPONSE)
-            }
           }
         } catch (err) {
           if (ERROR_LOG === true) { logger.write('[ERROR] getFiles -> controlLoop -> err = ' + err.stack) }
