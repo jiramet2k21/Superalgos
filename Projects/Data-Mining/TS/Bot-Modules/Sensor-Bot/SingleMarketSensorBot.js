@@ -659,6 +659,10 @@
                                     }
                                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                         "[INFO] run -> loop -> loopControl -> Restarting Loop in " + (waitTime / 1000) + " seconds.")
+                                    if (waitTime > 0) {
+                                        /* Spread simultaneous tasks across a deterministic per-process 0-20s window so their loops do not stampede shared resources on every cycle. Zero waits (event chaining / backtests) are preserved. */
+                                        waitTime = waitTime + TS.projects.foundations.functionLibraries.processFunctions.getLoopPhaseOffsetMs()
+                                    }
                                     nextLoopTimeoutHandle = setTimeout(loop, waitTime);
                                     TS.projects.foundations.functionLibraries.processFunctions.processHeartBeat(processIndex, undefined, undefined, "Waiting " + waitTime / 1000 + " seconds for next execution.")
                                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.persist();

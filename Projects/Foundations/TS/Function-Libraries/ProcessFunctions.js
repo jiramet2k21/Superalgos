@@ -5,7 +5,8 @@ exports.newFoundationsFunctionLibrariesProcessFunctions = function () {
         processError: processError,
         processWarning: processWarning,
         processInfo: processInfo,
-        stopProcess: stopProcess
+        stopProcess: stopProcess,
+        getLoopPhaseOffsetMs: getLoopPhaseOffsetMs
     }
 
     return thisObject
@@ -101,6 +102,25 @@ exports.newFoundationsFunctionLibrariesProcessFunctions = function () {
             status: status
         }
         TS.projects.foundations.globals.taskConstants.EVENT_SERVER_CLIENT_MODULE_OBJECT.raiseEvent(TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).PROCESS_KEY, 'Heartbeat', event)
+    }
+
+    function getLoopPhaseOffsetMs(pidOverride) {
+        /*
+        Returns a deterministic per-process phase offset (0 to 20000 ms) used to
+        desynchronize bot main loops across simultaneously started tasks, so they
+        do not stampede shared resources (CPU, exchange, disk) on every cycle.
+        The offset derives from the OS process id: tasks launched together receive
+        consecutive pids, which spreads their loops nearly one second apart. It
+        reshuffles harmlessly across restarts. Pass pidOverride only for testing.
+        */
+        let pid
+        if (pidOverride === undefined) {
+            if (typeof process === 'undefined' || process.pid === undefined) { return 0 }
+            pid = process.pid
+        } else {
+            pid = pidOverride
+        }
+        return (pid % 21) * 1000
     }
 
     function processError(processKey, node, errorMessage, docs) {
