@@ -152,6 +152,16 @@ function newUiObject() {
     let eventSubscriptionIdOnStopped
 
     let lastHeartBeat
+    /*
+    Silence handling for heartbeats. After a minute without a heartbeat the node stops looking
+    running, exactly as it always did. After a much longer silence we tell the user why, because a
+    process that dies mid-cycle leaves no error behind and used to look like a quiet, unexplained
+    reset. The stall warning is raised at most once per silence.
+    */
+    const HEART_BEAT_STALL_WARNING_AFTER = 300000
+    const HEART_BEAT_STALL_WARNING_DURATION = 30
+    let heartBeatHasTimedOut = false
+    let heartBeatStallReported = false
     let onRunningCallBackFunction
     let onRunningCallBackFunctionWasCalled = false
 
@@ -209,6 +219,8 @@ function newUiObject() {
         chainAttachToNode = undefined
         referenceAttachToNode = undefined
         lastHeartBeat = undefined
+        heartBeatHasTimedOut = false
+        heartBeatStallReported = false
 
         onRunningCallBackFunction = undefined
 
@@ -780,10 +792,26 @@ function newUiObject() {
         if (lastHeartBeat !== undefined) {
             const ONE_MIN = 60000
             nowTimestamp = (new Date()).valueOf()
-            if (nowTimestamp - lastHeartBeat.valueOf() > ONE_MIN) {
-                lastHeartBeat = undefined
-                thisObject.isRunning = false
-                valueCounter = 0
+            const silentFor = nowTimestamp - lastHeartBeat.valueOf()
+            if (silentFor > ONE_MIN) {
+                if (heartBeatHasTimedOut === false) {
+                    heartBeatHasTimedOut = true
+                    thisObject.isRunning = false
+                    valueCounter = 0
+                }
+                /*
+                Until now a process that stopped sending heartbeats just quietly stopped looking
+                alive, and the node was reset with nothing at all explaining why. That is exactly
+                what a stalled or broken internal callback chain looks like from here. A single
+                heavy cycle can legitimately take minutes, so we wait well past that before saying
+                anything, and then we say it only once per silence.
+                */
+                if (silentFor > HEART_BEAT_STALL_WARNING_AFTER && heartBeatStallReported === false) {
+                    heartBeatStallReported = true
+                    setWarningMessage('This process stopped reporting progress ' + Math.round(silentFor / 60000) +
+                        ' minutes ago. It may have stalled or ended without reporting an error. Check the process log for the last stage it reached.',
+                        HEART_BEAT_STALL_WARNING_DURATION)
+                }
             }
         } else {
             thisObject.isRunning = false
@@ -1053,6 +1081,8 @@ function newUiObject() {
 
     function heartBeat() {
         lastHeartBeat = new Date()
+        heartBeatHasTimedOut = false
+        heartBeatStallReported = false
         thisObject.isRunning = true
 
         if (onRunningCallBackFunctionWasCalled === false) {
