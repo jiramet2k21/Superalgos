@@ -80,6 +80,17 @@
 
                     TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).MAIN_LOOP_COUNTER++;
 
+                    /*
+                    Arm the stall watchdog for this cycle. Every heartbeat re-arms it and reaching
+                    loopControl() disarms it, so it only fires when the callback chain stopped
+                    handing control over, which would otherwise leave this process alive but doing
+                    nothing at all, with no error anywhere.
+                    */
+                    TS.projects.foundations.functionLibraries.processFunctions.armStallWatchdog(processIndex, onStallDetected)
+                    TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                        "[INFO] run -> loop -> stallWatchdog armed -> timeout = " +
+                        TS.projects.foundations.functionLibraries.processFunctions.getStallWatchdogTimeoutMs(processIndex) + " ms")
+
                     /* We tell the UI that we are running. */
                     TS.projects.foundations.functionLibraries.processFunctions.processHeartBeat(processIndex)
 
@@ -124,7 +135,7 @@
                                         case TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE.result: { // This is an unexpected exception that we do not know how to handle.
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> initializeProcessExecutionEvents -> onInizialized -> Operation Failed. Aborting the process.")
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                         default: {
@@ -132,7 +143,7 @@
                                                 "[ERROR] run -> loop -> initializeProcessExecutionEvents -> onInizialized -> Unhandled err.result received. -> err.result = " + err.result)
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> initializeProcessExecutionEvents -> onInizialized -> Unhandled err.result received. -> err = " + err.message)
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                     }
@@ -182,7 +193,7 @@
                                         case TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE.result: { // This is an unexpected exception that we do not know how to handle.
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> startProcessExecutionEvents -> onStarted -> Operation Failed. Aborting the process.")
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                         default: {
@@ -190,7 +201,7 @@
                                                 "[ERROR] run -> loop -> startProcessExecutionEvents -> onStarted -> Unhandled err.result received. -> err.result = " + err.result)
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> startProcessExecutionEvents -> onStarted -> Unhandled err.result received. -> err = " + err.message)
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                     }
@@ -235,7 +246,7 @@
                                         case TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE.result: { // This is an unexpected exception that we do not know how to handle.
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> initializeStatusDependencies -> onInizialized -> Operation Failed. Aborting the process.")
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                         default: {
@@ -243,7 +254,7 @@
                                                 "[ERROR] run -> loop -> initializeStatusDependencies -> onInizialized -> Unhandled err.result received. -> err.result = " + err.result)
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> initializeStatusDependencies -> onInizialized -> Unhandled err.result received. -> err = " + err.message)
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                     }
@@ -306,7 +317,7 @@
                                                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                         "[ERROR] run -> loop -> initializeDataDependencies -> onInizialized -> Process Framework Name = " +
                                                         TS.projects.foundations.globals.taskConstants.TASK_NODE.bot.processes[processIndex].referenceParent.config.framework.name)
-                                                    TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                                    TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                                     return
                                                 }
                                             }
@@ -322,7 +333,7 @@
                                         case TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE.result: { // This is an unexpected exception that we do not know how to handle.
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> initializeDataDependencies -> onInizialized -> Operation Failed. Aborting the process.")
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                         default: {
@@ -330,7 +341,7 @@
                                                 "[ERROR] run -> loop -> initializeDataDependencies -> onInizialized -> Unhandled err.result received. -> err.result = " + err.result)
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> initializeDataDependencies -> onInizialized -> Unhandled err.result received. -> err = " + err.message)
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                     }
@@ -374,7 +385,7 @@
                                         case TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE.result: { // This is an unexpected exception that we do not know how to handle.
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> initializeBotModuleObject -> onInizialized -> Operation Failed. Aborting the process.")
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                         case TS.projects.foundations.globals.standardResponses.CUSTOM_OK_RESPONSE.result: {
@@ -383,7 +394,7 @@
                                                 default: {
                                                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                         "[ERROR] run -> loop -> initializeBotModuleObject -> onInizialized > Unhandled custom response received. -> err = " + err.message)
-                                                    TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                                    TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                                     return
                                                 }
                                             }
@@ -393,7 +404,7 @@
                                                 "[ERROR] run -> loop -> initializeBotModuleObject -> onInizialized -> Unhandled err.result received. -> err.result = " + err.result)
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> initializeBotModuleObject -> onInizialized -> Unhandled err.result received. -> err = " + err.message)
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                     }
@@ -437,7 +448,7 @@
                                         case TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE.result: { // This is an unexpected exception that we do not know how to handle.
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> startBotModuleObject -> onFinished -> Operation Failed. Aborting the process.")
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                         case TS.projects.foundations.globals.standardResponses.CUSTOM_OK_RESPONSE.result: {
@@ -460,7 +471,7 @@
                                                 default: {
                                                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                         "[ERROR] run -> loop -> startBotModuleObject -> onFinished -> Unhandled custom response received. -> err = " + err.message)
-                                                    TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                                    TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                                     return
                                                 }
                                             }
@@ -470,7 +481,7 @@
                                                 "[ERROR] run -> loop -> startBotModuleObject -> onFinished -> Unhandled err.result received. -> err.result = " + err.result)
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> startBotModuleObject -> onFinished -> Unhandled err.result received. -> err = " + err.message)
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                     }
@@ -514,7 +525,7 @@
                                         case TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE.result: { // This is an unexpected exception that we do not know how to handle.
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> intitializeProcessFramework -> onInizialized -> Operation Failed. Aborting the process.")
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                         case TS.projects.foundations.globals.standardResponses.CUSTOM_OK_RESPONSE.result: {
@@ -523,7 +534,7 @@
                                                 default: {
                                                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                         "[ERROR] run -> loop -> intitializeProcessFramework -> onInizialized > Unhandled custom response received. -> err = " + err.message)
-                                                    TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                                    TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                                     return
                                                 }
                                             }
@@ -533,7 +544,7 @@
                                                 "[ERROR] run -> loop -> intitializeProcessFramework -> onInizialized -> Unhandled err.result received. -> err.result = " + err.result)
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> intitializeProcessFramework -> onInizialized -> Unhandled err.result received. -> err = " + err.message)
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                     }
@@ -584,7 +595,7 @@
                                         case TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE.result: { // This is an unexpected exception that we do not know how to handle.
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> startProcessFramework -> onFinished -> Operation Failed. Aborting the process.")
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                         case TS.projects.foundations.globals.standardResponses.CUSTOM_OK_RESPONSE.result: {
@@ -607,7 +618,7 @@
                                                 default: {
                                                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                         "[ERROR] run -> loop -> startProcessFramework -> onFinished -> Unhandled custom response received. -> err = " + err.message)
-                                                    TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                                    TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                                     return
                                                 }
                                             }
@@ -617,7 +628,7 @@
                                                 "[ERROR] run -> loop -> startProcessFramework -> onFinished -> Unhandled err.result received. -> err.result = " + err.result)
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> startProcessFramework -> onFinished -> Unhandled err.result received. -> err = " + err.message)
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                     }
@@ -665,7 +676,7 @@
                                         case TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE.result: { // This is an unexpected exception that we do not know how to handle.
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> finishProcessExecutionEvents -> onFinished -> Operation Failed. Aborting the process.")
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                         default: {
@@ -673,7 +684,7 @@
                                                 "[ERROR] run -> loop -> finishProcessExecutionEvents -> onFinished -> Unhandled err.result received. -> err.result = " + err.result)
                                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                                 "[ERROR] run -> loop -> finishProcessExecutionEvents -> onFinished -> Unhandled err.result received. -> err = " + err.message)
-                                            TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+                                            TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err)
                                             return
                                         }
                                     }
@@ -695,6 +706,12 @@
                     }
 
                     function loopControl(nextWaitTime) {
+                        /*
+                        The cycle reached its end, so the process is provably alive and healthy:
+                        disarm the watchdog before doing anything else.
+                        */
+                        TS.projects.foundations.functionLibraries.processFunctions.clearStallWatchdog(processIndex)
+
                         TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                             "[INFO] run -> loop -> loopControl -> nextWaitTime = " + nextWaitTime)
 
@@ -786,6 +803,29 @@
                     TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
                     return
                 }
+            }
+
+            function onStallDetected() {
+                /*
+                The watchdog fired: this cycle stopped handing control from stage to stage and, since
+                the next setTimeout is only ever scheduled at loopControl(), nothing else would ever
+                wake this process up. Rather than leaving it alive and mining nothing with no trace,
+                we stop it with an explicit error so the reason reaches the UI.
+                */
+                const processVariables = TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex)
+                const lastHeartBeat = (processVariables === undefined) ? undefined : processVariables.LAST_HEARTBEAT_AT
+                const silentFor = (lastHeartBeat === undefined)
+                    ? 'an unknown amount of time'
+                    : Math.round(((new Date()).valueOf() - lastHeartBeat.valueOf()) / 1000) + ' seconds'
+
+                const stallError = new Error('The mining cycle stalled and was aborted: the process stopped reporting progress for ' +
+                    silentFor + '. This normally means an internal callback chain broke before it could reach the end of the cycle.')
+                stallError.code = 'STALLED_MINING_CYCLE'
+
+                TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                    "[ERROR] run -> loop -> stallWatchdog -> " + stallError.message)
+
+                TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, stallError)
             }
 
         } catch (err) {

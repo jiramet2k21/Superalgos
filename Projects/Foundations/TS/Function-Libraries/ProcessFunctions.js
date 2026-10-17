@@ -1,17 +1,107 @@
 exports.newFoundationsFunctionLibrariesProcessFunctions = function () {
 
+    /*
+    A bot main loop is not really a loop: it is a ping-pong of callbacks handed from stage to stage
+    (initialize -> start -> execute -> finish -> loopControl). Every stage must invoke the callback it
+    receives, otherwise the chain dies and, because the next setTimeout is only ever scheduled inside
+    loopControl(), the process stays alive but silently stops doing any work at all.
+
+    The stall watchdog is the safety net for that whole class of failure. It is re-armed by every
+    heartbeat, so any real progress postpones it, and a heavy-but-healthy cycle is never a false
+    positive. Only a chain that truly stopped calling back trips it.
+    */
+    const DEFAULT_STALL_WATCHDOG_TIMEOUT_MS = 1800000
+
     let thisObject = {
         processHeartBeat: processHeartBeat,
         processError: processError,
         processWarning: processWarning,
         processInfo: processInfo,
         stopProcess: stopProcess,
+        failProcess: failProcess,
+        armStallWatchdog: armStallWatchdog,
+        clearStallWatchdog: clearStallWatchdog,
+        getStallWatchdogTimeoutMs: getStallWatchdogTimeoutMs,
         getLoopPhaseOffsetMs: getLoopPhaseOffsetMs
     }
 
     return thisObject
 
+    function getProcessVariables(processIndex) {
+        return TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex)
+    }
+
+    function getStallWatchdogTimeoutMs(processIndex) {
+        /*
+        The timeout can be tuned per process with config.cycleWatchdogTimeout (milliseconds).
+        Undefined falls back to 30 minutes. Zero (or a negative/invalid value) disables the watchdog.
+        */
+        let configured
+        try {
+            configured = TS.projects.foundations.globals.taskConstants.TASK_NODE.bot.processes[processIndex].referenceParent.config.cycleWatchdogTimeout
+        } catch (err) {
+            configured = undefined
+        }
+        if (configured === undefined || configured === null || configured === '') {
+            return DEFAULT_STALL_WATCHDOG_TIMEOUT_MS
+        }
+        const value = Number(configured)
+        if (!isFinite(value) || value <= 0) { return 0 }
+        return value
+    }
+
+    function rearmStallWatchdog(processIndex) {
+        const processVariables = getProcessVariables(processIndex)
+        if (processVariables === undefined || processVariables.STALL_WATCHDOG === undefined) { return }
+        const watchdog = processVariables.STALL_WATCHDOG
+        if (watchdog.timeoutMs <= 0) { return }
+        if (watchdog.handle !== undefined) { clearTimeout(watchdog.handle) }
+        watchdog.handle = setTimeout(watchdog.onStall, watchdog.timeoutMs)
+    }
+
+    function armStallWatchdog(processIndex, onStall) {
+        const processVariables = getProcessVariables(processIndex)
+        if (processVariables === undefined) { return }
+        clearStallWatchdog(processIndex)
+        processVariables.STALL_WATCHDOG = {
+            timeoutMs: getStallWatchdogTimeoutMs(processIndex),
+            handle: undefined,
+            onStall: onStall
+        }
+        rearmStallWatchdog(processIndex)
+    }
+
+    function clearStallWatchdog(processIndex) {
+        const processVariables = getProcessVariables(processIndex)
+        if (processVariables === undefined || processVariables.STALL_WATCHDOG === undefined) { return }
+        if (processVariables.STALL_WATCHDOG.handle !== undefined) {
+            clearTimeout(processVariables.STALL_WATCHDOG.handle)
+            processVariables.STALL_WATCHDOG.handle = undefined
+        }
+    }
+
+    function failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, err) {
+        /*
+        Every branch that decides to abort a process must go through here, because stopProcess() only
+        raises a visible error to the UI when UNEXPECTED_ERROR is set. When it is not set, stopProcess()
+        reports a clean 'Stopped' and answers OK, which makes the caller log "execution finished
+        successfully" for what was in fact a failure. failProcess() guarantees the error is always
+        carried, synthesizing one when the caller could not provide details.
+        */
+        const processVariables = getProcessVariables(processIndex)
+        if (processVariables === undefined) { return }
+        if (processVariables.UNEXPECTED_ERROR === undefined) {
+            processVariables.UNEXPECTED_ERROR = (err !== undefined && err !== null)
+                ? err
+                : new Error('The process reported a failure but did not provide any error details.')
+        }
+        stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
+    }
+
     function stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle) {
+
+        /* A process that is stopping does not need the stall watchdog anymore. */
+        clearStallWatchdog(processIndex)
 
         /* Make sure that the logger associated to this process saves its cache */
         TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.persist()
@@ -101,7 +191,13 @@ exports.newFoundationsFunctionLibrariesProcessFunctions = function () {
             percentage: percentage,
             status: status
         }
+        const processVariables = getProcessVariables(processIndex)
+        if (processVariables !== undefined) {
+            processVariables.LAST_HEARTBEAT_AT = new Date()
+        }
         TS.projects.foundations.globals.taskConstants.EVENT_SERVER_CLIENT_MODULE_OBJECT.raiseEvent(TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).PROCESS_KEY, 'Heartbeat', event)
+        /* Progress was just reported, so give the process a full stall window before declaring it stuck. */
+        rearmStallWatchdog(processIndex)
     }
 
     function getLoopPhaseOffsetMs(pidOverride) {

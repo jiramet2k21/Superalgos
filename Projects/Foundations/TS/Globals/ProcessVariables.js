@@ -41,6 +41,8 @@ exports.newFoundationsGlobalsProcessVariables = function () {
     WAIT_FOR_EXECUTION_FINISHED_EVENT       This boolean flag tell us if the process waits for an event to continue.
     WAIT_FOR_TRADING_SIGNAL_TO_ARRIVE       This boolean flag tell us if the process waits for a trading signal to arrive in order to continue.
     UNEXPECTED_ERROR                        When we encounter an error that will produce the Process to be stopped, we store the err object here so that is properties can be extracted for logging purposes.
+    LAST_HEARTBEAT_AT                       Date of the last heartbeat emitted by this process. Used by the stall watchdog to tell a busy process from a stuck one.
+    STALL_WATCHDOG                          Handle and timeout of the stall watchdog ({timeoutMs, handle, onStall}). Armed at the beginning of every main loop and re-armed by every heartbeat.
 
     */
     return thisObject
