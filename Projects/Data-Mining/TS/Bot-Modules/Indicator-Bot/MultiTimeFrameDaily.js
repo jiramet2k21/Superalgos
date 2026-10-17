@@ -17,6 +17,9 @@
     let dataFiles = new Map
     let indicatorOutputModule
     let bootstrappingTheProcess = false
+/* Per day counters, used to tell a productive day from one where every time frame got filtered out. */
+let timeFramesProcessedThisDay = 0
+let timeFramesDiscardedThisDay = 0
     let beginingOfMarket
 
     return thisObject;
@@ -313,6 +316,9 @@
                         if (TS.projects.foundations.globals.taskConstants.TASK_NODE.bot.timeFramesFilter.config.dailyTimeFrames !== undefined) {
                             if (TS.projects.foundations.globals.taskConstants.TASK_NODE.bot.timeFramesFilter.config.dailyTimeFrames.includes(timeFrameLabel) === false) {
                                 /* We are not going to process this Time Frame */
+                                timeFramesDiscardedThisDay++
+                                TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                                    "[WARN] start -> processTimeFrames -> timeFramesLoopBody -> Discarding time frame because it is not listed in the Time Frames Filter. -> timeFrameLabel = " + timeFrameLabel)
                                 timeFramesControlLoop()
                                 return
                             }
@@ -326,12 +332,14 @@
                             if (period === timeFrameLabel) { validPeriod = true }
                         }
                         if (validPeriod === false) {
+                            timeFramesDiscardedThisDay++
                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                 "[INFO] start -> processTimeFrames -> timeFramesLoopBody -> Discarding period for not being listed as a valid period. -> timeFrameLabel = " + timeFrameLabel)
                             timeFramesControlLoop()
                             return
                         }
                     }
+                    timeFramesProcessedThisDay++
                     let dependencyIndex = 0
                     dataFiles = new Map()
 
@@ -432,6 +440,8 @@
                                         we will consider the possibility that a dependant process does not produce a file during the first day of the market,
                                         or even more than one day. That is why we are going to advance time here.
                                         */
+                                        TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                                            "[WARN] start -> processTimeFrames -> timeFramesLoopBody -> dependencyLoopBody -> getCurrentFile -> onFileReceived -> the dependency file does not exist yet and the process is still bootstrapping, so this day is being skipped. -> filePath = " + filePath + " -> fileName = " + fileName)
                                         advanceTime()
                                         return
                                     }
@@ -491,12 +501,32 @@
                     }
                 }
 
+                function reportDiscardedTimeFrames() {
+                    /*
+                    If the Time Frames Filter or the valid periods list leaves nothing to process,
+                    the cycle used to walk every time frame, discard all of them in complete silence,
+                    write no file at all, and still report success. Say it out loud instead.
+                    */
+                    if (timeFramesProcessedThisDay === 0 && timeFramesDiscardedThisDay > 0) {
+                        TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                            "[WARN] start -> processTimeFrames -> reportDiscardedTimeFrames -> every single time frame was discarded by the Time Frames Filter or by the valid periods configuration, so this day produced no data at all. -> discarded = " + timeFramesDiscardedThisDay)
+                        TS.projects.foundations.functionLibraries.processFunctions.processWarning(
+                            TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).PROCESS_KEY,
+                            undefined,
+                            'Every time frame was discarded by the Time Frames Filter or by the valid periods configuration, so this process is producing no data. Review the Time Frames Filter and the valid periods of this process.'
+                        )
+                    }
+                    timeFramesProcessedThisDay = 0
+                    timeFramesDiscardedThisDay = 0
+                }
+
                 function timeFramesControlLoop() {
                     n++
                     if (n < TS.projects.foundations.globals.timeFrames.dailyTimeFramesArray().length) {
                         timeFramesLoopBody()
                     } else {
                         n = 0;
+                        reportDiscardedTimeFrames()
                         writeDataRanges(onWritten)
 
                         function onWritten(err) {
@@ -505,6 +535,17 @@
                                     "[ERROR] start -> processTimeFrames -> controlLoop -> onWritten -> err = " + err.stack)
                                 callBackFunction(err)
                                 return
+                            }
+                            /*
+                            This day produced its output, so the process is no longer bootstrapping.
+                            While this flag stayed true it never came back to false, so every later
+                            day missing a dependency file was skipped in silence, advancing time and
+                            writing nothing at all, and the cycle still ended reporting success.
+                            */
+                            if (bootstrappingTheProcess === true) {
+                                bootstrappingTheProcess = false
+                                TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                                    "[INFO] start -> processTimeFrames -> controlLoop -> onWritten -> bootstrapping finished, missing dependency files will not be skipped anymore.")
                             }
                             writeStatusReport(TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).DAILY_FILES_PROCESS_DATETIME, advanceTime)
                         }

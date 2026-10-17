@@ -16,6 +16,9 @@
     let dataDependenciesModule
     let dataFiles = new Map()
     let indicatorOutputModule
+    /* Per cycle counters, used to tell real work from a cycle where every time frame got filtered out. */
+    let timeFramesProcessedThisCycle = 0
+    let timeFramesDiscardedThisCycle = 0
 
     return thisObject;
 
@@ -60,11 +63,15 @@
                         if (TS.projects.foundations.globals.taskConstants.TASK_NODE.bot.timeFramesFilter.config.marketTimeFrames !== undefined) {
                             if (TS.projects.foundations.globals.taskConstants.TASK_NODE.bot.timeFramesFilter.config.marketTimeFrames.includes(timeFrameLabel) === false) {
                                 /* We are not going to process this Time Frame */
+                                timeFramesDiscardedThisCycle++
+                                TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                                    "[WARN] start -> processTimeFrames -> timeFramesLoopBody -> Discarding time frame because it is not listed in the Time Frames Filter. -> timeFrameLabel = " + timeFrameLabel)
                                 timeFramesControlLoop()
                                 return
                             }
                         }
                     }
+                    timeFramesProcessedThisCycle++
 
                     let dependencyIndex = 0;
                     dataFiles = new Map;
@@ -141,11 +148,31 @@
                     if (n < TS.projects.foundations.globals.timeFrames.marketTimeFramesArray().length) {
                         timeFramesLoopBody()
                     } else {
+                        reportDiscardedTimeFrames()
                         writeTimeFramesFiles(onTimeFrameFilesWritten)
                         function onTimeFrameFilesWritten() {
                             writeStatusReport(callBackFunction)
                         }
                     }
+                }
+
+                function reportDiscardedTimeFrames() {
+                    /*
+                    If the Time Frames Filter leaves nothing to process, the cycle used to walk every
+                    time frame, discard all of them in complete silence, write no file at all, and
+                    still report success. Say it out loud instead.
+                    */
+                    if (timeFramesProcessedThisCycle === 0 && timeFramesDiscardedThisCycle > 0) {
+                        TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                            "[WARN] start -> processTimeFrames -> reportDiscardedTimeFrames -> every single time frame was discarded by the Time Frames Filter, so this cycle produced no data at all. -> discarded = " + timeFramesDiscardedThisCycle)
+                        TS.projects.foundations.functionLibraries.processFunctions.processWarning(
+                            TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).PROCESS_KEY,
+                            undefined,
+                            'Every time frame was discarded by the Time Frames Filter, so this process is producing no data. Review the Time Frames Filter of this task.'
+                        )
+                    }
+                    timeFramesProcessedThisCycle = 0
+                    timeFramesDiscardedThisCycle = 0
                 }
             }
 
