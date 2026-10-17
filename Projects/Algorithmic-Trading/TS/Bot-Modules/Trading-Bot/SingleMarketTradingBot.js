@@ -58,6 +58,20 @@
 
                     TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).MAIN_LOOP_COUNTER++;
 
+                    /*
+                    Arm the stall watchdog for this cycle. Every heartbeat re-arms it and reaching
+                    loopControl() disarms it, so it only fires when the callback chain stopped handing
+                    control over, which would otherwise leave this process alive but doing nothing at
+                    all, with no error anywhere.
+
+                    It is off unless the process sets config.cycleWatchdogTimeout (milliseconds) in its
+                    configuration: we pass 0 as the default, which never arms a timer. Trading sessions
+                    are the most expensive thing here to lose, because a session only picks its saved
+                    state back up when it is resumed rather than run, so enabling this is a deliberate
+                    per-process decision.
+                    */
+                    TS.projects.foundations.functionLibraries.processFunctions.armStallWatchdog(processIndex, onStallDetected, 0)
+
                     let nextWaitTime;
 
                     /* We tell the UI that we are running. */
@@ -645,6 +659,12 @@
                     }
 
                     function loopControl(nextWaitTime) {
+                        /*
+                        The cycle reached its end, so the process is provably alive and healthy:
+                        disarm the watchdog before doing anything else.
+                        */
+                        TS.projects.foundations.functionLibraries.processFunctions.clearStallWatchdog(processIndex)
+
                         TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                             "[INFO] run -> loop -> loopControl -> nextWaitTime = " + nextWaitTime)
 
@@ -777,6 +797,30 @@
                     TS.projects.foundations.functionLibraries.processFunctions.stopProcess(processIndex, callBackFunction, nextLoopTimeoutHandle)
                     return
                 }
+            }
+
+            function onStallDetected() {
+                /*
+                The watchdog fired: this cycle stopped handing control from stage to stage and, since
+                the next setTimeout is only ever scheduled at loopControl(), nothing else would ever
+                wake this process up. Rather than leaving a trading process alive and idle with no
+                trace, we stop it with an explicit error so the reason reaches the UI. The session can
+                then be resumed, which is what brings back its saved state.
+                */
+                const processVariables = TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex)
+                const lastHeartBeat = (processVariables === undefined) ? undefined : processVariables.LAST_HEARTBEAT_AT
+                const silentFor = (lastHeartBeat === undefined)
+                    ? 'an unknown amount of time'
+                    : Math.round(((new Date()).valueOf() - lastHeartBeat.valueOf()) / 1000) + ' seconds'
+
+                const stallError = new Error('The trading process stalled and was aborted: it stopped reporting progress for ' +
+                    silentFor + '. This normally means an internal callback chain broke before it could reach the end of the cycle. Resume the session to pick up where it left off.')
+                stallError.code = 'STALLED_TRADING_CYCLE'
+
+                TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                    "[ERROR] run -> loop -> stallWatchdog -> " + stallError.message)
+
+                TS.projects.foundations.functionLibraries.processFunctions.failProcess(processIndex, callBackFunction, nextLoopTimeoutHandle, stallError)
             }
 
         } catch (err) {

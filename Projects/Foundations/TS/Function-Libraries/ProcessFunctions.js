@@ -31,10 +31,13 @@ exports.newFoundationsFunctionLibrariesProcessFunctions = function () {
         return TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex)
     }
 
-    function getStallWatchdogTimeoutMs(processIndex) {
+    function getStallWatchdogTimeoutMs(processIndex, defaultTimeoutMs) {
         /*
         The timeout can be tuned per process with config.cycleWatchdogTimeout (milliseconds).
-        Undefined falls back to 30 minutes. Zero (or a negative/invalid value) disables the watchdog.
+        When it is not configured we fall back to defaultTimeoutMs, or to 30 minutes when the caller
+        does not say otherwise. Passing 0 as the default leaves the process opted out: no timer is ever
+        armed until someone sets the value in its configuration.
+        Zero (or a negative/invalid value) always disables the watchdog.
         */
         let configured
         try {
@@ -43,7 +46,7 @@ exports.newFoundationsFunctionLibrariesProcessFunctions = function () {
             configured = undefined
         }
         if (configured === undefined || configured === null || configured === '') {
-            return DEFAULT_STALL_WATCHDOG_TIMEOUT_MS
+            return (defaultTimeoutMs === undefined) ? DEFAULT_STALL_WATCHDOG_TIMEOUT_MS : defaultTimeoutMs
         }
         const value = Number(configured)
         if (!isFinite(value) || value <= 0) { return 0 }
@@ -59,12 +62,12 @@ exports.newFoundationsFunctionLibrariesProcessFunctions = function () {
         watchdog.handle = setTimeout(watchdog.onStall, watchdog.timeoutMs)
     }
 
-    function armStallWatchdog(processIndex, onStall) {
+    function armStallWatchdog(processIndex, onStall, defaultTimeoutMs) {
         const processVariables = getProcessVariables(processIndex)
         if (processVariables === undefined) { return }
         clearStallWatchdog(processIndex)
         processVariables.STALL_WATCHDOG = {
-            timeoutMs: getStallWatchdogTimeoutMs(processIndex),
+            timeoutMs: getStallWatchdogTimeoutMs(processIndex, defaultTimeoutMs),
             handle: undefined,
             onStall: onStall
         }
