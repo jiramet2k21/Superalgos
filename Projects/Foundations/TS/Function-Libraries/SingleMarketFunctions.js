@@ -598,6 +598,18 @@
 
     function writeFile(processIndex, contextSummary, fileContent, anotherFileWritten, processingDailyFiles, timeFrameLabel, currentDay, callBackFunction) {
 
+        /*
+        generateFileContent returns undefined when it failed, and it already reported that failure
+        through callBackFunction. Writing here anyway used to store the 9 byte string "undefined"
+        inside Data.json, corrupting the output file while the process carried on and eventually
+        reported success. Do not write anything we could not build.
+        */
+        if (fileContent === undefined || fileContent === null) {
+            TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                "[ERROR] start -> writeFile -> the file content could not be generated, so no file was written. -> product = " + contextSummary.product + " -> dataset = " + contextSummary.dataset);
+            return
+        }
+
         try {
             let fileName = 'Data.json';
             let dateForPath = ''

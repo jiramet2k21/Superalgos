@@ -122,6 +122,27 @@
             corresponding to each output outputDatasetNode.
             */
             let totalFilesWritten = 0
+            let completionReported = false
+
+            /*
+            There is nothing to write when the process has no output datasets at all. The loop below
+            would never run and anotherFileWritten() would never be reached, so the callback that
+            ends this stage was never invoked: the main loop chain died there and the process stayed
+            alive, mining nothing, without any error. Report the condition explicitly and let the
+            caller continue instead.
+            */
+            if (outputDatasets.length === 0) {
+                TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                    "[WARN] start -> buildOutput -> this process has no Output Datasets defined, so no file was produced. Add at least one Output Dataset to the process or remove the process from the task.")
+                TS.projects.foundations.functionLibraries.processFunctions.processWarning(
+                    TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).PROCESS_KEY,
+                    undefined,
+                    'This process has no Output Datasets defined, so no data was produced. Add at least one Output Dataset to the process or remove the process from the task.'
+                )
+                callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_OK_RESPONSE)
+                return
+            }
+
             for (let i = 0; i < outputDatasets.length; i++) {
                 let outputDatasetNode = outputDatasets[i]
                 let outputData = products[outputDatasetNode.referenceParent.parentNode.config.pluralVariableName]
@@ -152,7 +173,14 @@
 
             function anotherFileWritten() {
                 totalFilesWritten++
-                if (totalFilesWritten === outputDatasets.length) {
+                if (totalFilesWritten === outputDatasets.length && completionReported === false) {
+                    /*
+                    A single failing file already sent the error up through callBackFunction, so the
+                    remaining files of this batch can still land here. Without this guard the stage
+                    would report completion a second time and the caller would advance its loop twice,
+                    silently skipping work.
+                    */
+                    completionReported = true
                     callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_OK_RESPONSE);
                 }
             }
