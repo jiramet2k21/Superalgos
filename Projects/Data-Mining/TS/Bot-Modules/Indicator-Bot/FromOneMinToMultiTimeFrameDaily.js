@@ -348,7 +348,12 @@ exports.newDataMiningBotModulesFromOneMinToMultiTimeFrameDaily = function (proce
                 callBack(err)
                 return
             }
-            //callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_OK_RESPONSE)
+            /*
+            The file was created, so we hand control back to the caller (controlLoop), which is the
+            only thing that moves to the next output dataset. Leaving this commented out stalled the
+            whole mining cycle here: the process stayed alive, mining nothing, with no error at all.
+            */
+            callBack(TS.projects.foundations.globals.standardResponses.DEFAULT_OK_RESPONSE)
         }
             }
 
