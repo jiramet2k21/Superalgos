@@ -46,11 +46,29 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
         } catch (err) {
             TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).UNEXPECTED_ERROR = err
             SA.logger.error(MODULE_NAME + " initialize -> err = " + err.stack);
+            processIsRunning = false
             callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
         }
     }
 
     function start(callBackFunction) {
+        /*
+        Every stage of this process reports its outcome through callBackFunction, and at least one of
+        them (saveOHLCVs) keeps going after reporting a failure instead of returning. Wrapping the
+        callback keeps the first outcome the one that counts, so a stage that fails cannot be followed
+        by a contradictory success from the stages after it.
+        */
+        let outcomeReported = false
+        const originalCallBackFunction = callBackFunction
+        callBackFunction = function (response) {
+            if (outcomeReported === true) {
+                TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                    "[WARN] start -> a second outcome was reported for this execution and was ignored, the first one already decided it.")
+                return
+            }
+            outcomeReported = true
+            originalCallBackFunction(response)
+        }
         if (processIsRunning === false) {
             SA.logger.info(MODULE_NAME + " Starting Scanner")
             TS.projects.foundations.functionLibraries.processFunctions.processHeartBeat(processIndex,  "Starting Scanner") // tell the world we are alive and doing well                                
@@ -100,12 +118,30 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
                         beginingOfMarket = new Date(thisReport.file.beginingOfMarket);
                         lastFile = new Date(thisReport.file.lastFile);
                         defineSince()
-                        secondCallBack(dbPath, dbTable, dbTimestamp, thisReport.file.lastRun, processAndSaveMessages)
+                        onDatabaseCallFailed(firstCallToSQLiteDB(dbPath, dbTable, dbTimestamp, thisReport.file.lastRun, processAndSaveMessages))
 
                     } else { // If there is no status report, we assume there is no previous file or that if there is we will override it.
                         beginingOfMarket = new Date(uiStartDate.valueOf())
                         defineSince()
-                        callBack(dbPath, dbTable, dbTimestamp, beginingOfMarket, processAndSaveMessages)
+                        onDatabaseCallFailed(callBack(dbPath, dbTable, dbTimestamp, beginingOfMarket, processAndSaveMessages))
+                    }
+
+                    /*
+                    Both database helpers are async and reject on any sqlite error. Called without a
+                    rejection handler, such an error surfaced as an unhandledRejection, which the Node JS
+                    process turns into an immediate exit of the whole Task Server: every process instance
+                    in the task went down and the only thing the user saw was a Stopped event, with no
+                    error raised anywhere. Report it as a normal process failure instead.
+                    */
+                    function onDatabaseCallFailed(promise) {
+                        if (promise === undefined || promise === null || typeof promise.catch !== 'function') { return promise }
+                        return promise.catch(err => {
+                            TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                                "[ERROR] start -> database query failed -> err = " + (err === undefined ? 'unknown error' : (err.stack || JSON.stringify(err))))
+                            processIsRunning = false
+                            callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
+                            return undefined
+                        })
                     }
 
                     function defineSince() {
@@ -135,6 +171,7 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
                         SA.logger.error("[HINT] " + MODULE_NAME + " start -> getContextVariables -> Check the bot Status Dependencies. ");
                         SA.logger.error("[HINT] " + MODULE_NAME + " start -> getContextVariables -> Dependencies loaded -> keys = " + JSON.stringify(statusDependencies.keys));
                     }
+                    processIsRunning = false
                     callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
                 }
             }
@@ -316,6 +353,7 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
                             TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).UNEXPECTED_ERROR = err
                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                 "[ERROR] start -> saveOHLCVs -> err = " + err.stack);
+                            processIsRunning = false
                             callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
                             //abort = true
                         } 
@@ -614,6 +652,7 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
                             TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).UNEXPECTED_ERROR = err
                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                 "[ERROR] start -> saveOHLCVs -> err = " + err.stack);
+                            processIsRunning = false
                             callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
                         }  
                     }
@@ -627,6 +666,9 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
                             let filesCreated = 0 
                             let filesToCreate = files.length + 1 // add one for raw min chunk file
                             let lastFileDate
+                            /* Only the first outcome of this batch is reported, so a failure cannot be
+                            followed by a success callback from the files still landing. */
+                            let saveCompletionReported = false
 
                             SA.logger.info(MODULE_NAME + ' Saving Files. Current file count: ' + filesToCreate)
                             TS.projects.foundations.functionLibraries.processFunctions.processHeartBeat(processIndex,  'Saving Files...')                          
@@ -665,12 +707,27 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
                                 if (err.result !== TS.projects.foundations.globals.standardResponses.DEFAULT_OK_RESPONSE.result) {
                                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                         "[ERROR] start -> OHLCVsReadyToBeSaved -> onFileBCreated -> err = " + JSON.stringify(err));
+                                    /*
+                                    This used to only set 'error' and return. Nothing in this module ever read that
+                                    variable, so the single failed write left filesCreated short of filesToCreate,
+                                    writeStatusReport() was never reached, and because processIsRunning is only
+                                    cleared from writeStatusReport, every later cycle hit the "process already
+                                    running" branch and did nothing at all, forever, with no error anywhere.
+                                    Report the failure now and release the latch.
+                                    */
                                     error = err // This allows the loop to be broken.
+                                    processIsRunning = false
+                                    if (saveCompletionReported === false) {
+                                        saveCompletionReported = true
+                                        callBackFunction(err)
+                                    }
                                     return
                                 }
                                 filesCreated++
                                 lastFile = lastFileDate
                                 if (filesCreated === filesToCreate) {
+                                    if (saveCompletionReported === true) { return }
+                                    saveCompletionReported = true
                                     SA.logger.info(MODULE_NAME + ' Saving Compelete!')
                                     TS.projects.foundations.functionLibraries.processFunctions.processHeartBeat(processIndex,  'Saving Complete!')                          
 
@@ -683,6 +740,7 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
                             TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).UNEXPECTED_ERROR = err
                             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                 "[ERROR] start -> saveOHLCVs -> err = " + err.stack);
+                            processIsRunning = false
                             callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
                         }         
                     }
@@ -784,6 +842,7 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
                     TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).UNEXPECTED_ERROR = err
                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                         "[ERROR] start -> saveMessages -> err = " + err.stack);
+                    processIsRunning = false
                     callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
                 }
             }
@@ -815,6 +874,7 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
                     TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).UNEXPECTED_ERROR = err
                     TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                         "[ERROR] start -> writeStatusReport -> err = " + err.stack);
+                    processIsRunning = false
                     callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
                 }
             }
@@ -822,10 +882,20 @@ exports.newDataMiningBotModulesScanDatabase = function (processIndex) {
             TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).UNEXPECTED_ERROR = err
             TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                 "[ERROR] start -> err = " + err.stack);
+            processIsRunning = false
             callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
             }
         } else {
-            console.log("process already running");
+            /*
+            Reaching this branch meant the previous execution never released the run flag, so every
+            later cycle walked in here and did nothing at all, leaving no trace in the process log and
+            no callback for the caller. The flag is now released on every failure path, so getting here
+            means a genuine overlap. Say so in the process log rather than only in the console, and let
+            the caller know the cycle did not run.
+            */
+            TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                "[WARN] start -> the previous execution is still flagged as running, so this cycle was skipped. Check the process log for the stage that did not release the run flag.")
+            callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_RETRY_RESPONSE);
         }
     }
 };

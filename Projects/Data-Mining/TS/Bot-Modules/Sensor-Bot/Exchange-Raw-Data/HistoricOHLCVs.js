@@ -234,6 +234,22 @@
     }
 
     function start(callBackFunction) {
+        /*
+        begin() and everything it awaits report their outcome through callBackFunction. Wrapping it
+        here keeps the first outcome the one that counts, so a rejection that escapes begin() after it
+        already reported cannot go on to report a second, contradictory outcome.
+        */
+        let outcomeReported = false
+        const originalCallBackFunction = callBackFunction
+        callBackFunction = function (response) {
+            if (outcomeReported === true) {
+                TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                    "[WARN] start -> a second outcome was reported for this execution and was ignored, the first one already decided it.")
+                return
+            }
+            outcomeReported = true
+            originalCallBackFunction(response)
+        }
         try {
             /* 
             Initialize the array where we are going to receive the 
@@ -248,7 +264,18 @@
             }
 
             let abort = false
-            begin()
+            /*
+            begin() is async and was invoked without a rejection handler. Anything it threw became an
+            unhandledRejection, which the Node JS process turns into an immediate exit of the whole Task
+            Server, taking every process instance in the task down with it and showing the user nothing
+            but a Stopped event. Turn it into an ordinary process failure instead.
+            */
+            begin().catch(err => {
+                TS.projects.foundations.globals.processVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).UNEXPECTED_ERROR = err
+                TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
+                    "[ERROR] start -> the OHLCVs process failed unexpectedly -> err = " + (err === undefined ? 'unknown error' : (err.stack || JSON.stringify(err))))
+                callBackFunction(TS.projects.foundations.globals.standardResponses.DEFAULT_FAIL_RESPONSE);
+            })
 
             async function begin() {
 
@@ -803,6 +830,9 @@
 
                         let filesToCreate = 0
                         let filesCreated = 0
+                        /* Only the first outcome of this day's batch is reported, so a failure cannot be
+                        followed by a success callback from the files still landing. */
+                        let saveCompletionReported = false
 
                         /* 
                         We will loop around all the possible 1 minute candles that have been found
@@ -1123,12 +1153,26 @@
                             if (err.result !== TS.projects.foundations.globals.standardResponses.DEFAULT_OK_RESPONSE.result) {
                                 TS.projects.foundations.globals.loggerVariables.VARIABLES_BY_PROCESS_INDEX_MAP.get(processIndex).BOT_MAIN_LOOP_LOGGER_MODULE_OBJECT.write(MODULE_NAME,
                                     "[ERROR] start -> OHLCVsReadyToBeSaved -> onFileBCreated -> err = " + JSON.stringify(err));
+                                /*
+                                Setting 'error' and returning here was not enough. Because filesCreated is
+                                not incremented, controlLoop() is never called, and controlLoop() is the only
+                                place that reads 'error' and hands it to callBackFunction. The failure
+                                therefore stayed inside this closure: the day loop simply stopped iterating
+                                and the process kept running with no error surfaced anywhere.
+                                Report it from here instead.
+                                */
                                 error = err // This allows the loop to be broken.
+                                if (saveCompletionReported === false) {
+                                    saveCompletionReported = true
+                                    callBackFunction(err)
+                                }
                                 return;
                             }
                             filesCreated++
                             lastFile = new Date((currentDay * SA.projects.foundations.globals.timeConstants.ONE_DAY_IN_MILISECONDS))
                             if (filesCreated === filesToCreate) {
+                                if (saveCompletionReported === true) { return }
+                                saveCompletionReported = true
                                 controlLoop()
                             }
                         }
